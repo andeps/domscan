@@ -12,15 +12,17 @@
 - 默认通过 IANA RDAP Bootstrap 表路由到权威注册局；`DOMAIN_RDAP_FALLBACK_URLS` 提供备用检测地址。
 - 运行配置由 `config` 从 `.env` 和系统环境变量加载；系统环境变量优先。
 - 可选 Redis 读穿缓存使用官方 `go-redis/v9`；本地服务由 `compose.yaml` 提供。
+- 用户模块使用 PostgreSQL 和 bcrypt；服务启动时自动创建用户表。
 
 ## 目录职责
 
 ```text
-cmd/server/main.go                 进程入口、环境变量、HTTP 生命周期
+main.go                            进程入口、环境变量、HTTP 生命周期
 config/                            .env 解析、默认值、类型转换和配置校验
 domain/                            候选生成、输入规范化、域名校验
 availability/                      检测接口、结果模型、RDAP 实现
 rediscache/                        availability.Cache 的 Redis 实现
+user/                              用户注册、登录和密码哈希
 httpserver/server.go               Gin 路由、中间件、输入限制、并发与流式响应
 httpserver/web/                    被嵌入的浏览器界面
 ```
@@ -28,7 +30,7 @@ httpserver/web/                    被嵌入的浏览器界面
 依赖必须保持单向：
 
 ```text
-cmd/server
+main.go
     ├── config
     ├── httpserver
     ├── availability
@@ -66,6 +68,7 @@ rediscache
 15. `/api/search` 的 NDJSON 最后一行是 `event: summary` 汇总，前端解析时不能把它当作域名结果渲染。
 16. `fuzzyMode` 支持 `none`、`prefix`、`suffix`、`both`；模糊追加字符必须遵守主体长度和数字规则。
 17. 停止检测通过请求上下文取消实现；新增检测协程必须监听 `ctx.Done()`，不能在客户端取消后继续发起请求。
+18. 用户邮箱作为唯一账号，密码只能保存 bcrypt 哈希，不能记录明文。
 
 ## 常用命令
 
@@ -81,10 +84,10 @@ make cache-up  # 启动本地 Redis
 也可以直接运行：
 
 ```bash
-go run ./cmd/server
+go run .
 go test ./...
 go vet ./...
-go build -o bin/domscan ./cmd/server
+go build -o bin/domscan .
 node --check httpserver/web/app.js
 ```
 

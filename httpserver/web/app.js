@@ -19,6 +19,32 @@ const counts = {
 };
 let results = [];
 let activeController = null;
+let currentUser = JSON.parse(localStorage.getItem('domscan-user') || 'null');
+let authToken = localStorage.getItem('domscan-token') || '';
+let authMode = 'login';
+const authDialog = document.querySelector('#auth-dialog');
+const userDialog = document.querySelector('#user-dialog');
+function refreshAccountUI() { document.querySelector('#login-open').hidden = !!currentUser; document.querySelector('#user-open').hidden = !currentUser; }
+function openAuth(mode) { authMode = mode; document.querySelector('#auth-title').textContent = mode === 'login' ? '登录' : '注册'; document.querySelector('#auth-switch').textContent = mode === 'login' ? '没有账号？注册' : '已有账号？登录'; document.querySelector('#auth-error').textContent = ''; authDialog.showModal(); }
+document.querySelector('#login-open').addEventListener('click', () => openAuth('login'));
+document.querySelector('#register-open').addEventListener('click', () => openAuth('register'));
+document.querySelector('#auth-close').addEventListener('click', () => authDialog.close());
+document.querySelector('#auth-switch').addEventListener('click', () => openAuth(authMode === 'login' ? 'register' : 'login'));
+document.querySelector('#auth-form').addEventListener('submit', async event => { event.preventDefault(); const error = document.querySelector('#auth-error'); error.textContent = ''; const payload = {email: document.querySelector('#auth-email').value, password: document.querySelector('#auth-password').value}; try { const response = await fetch(`/api/auth/${authMode}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); const data = await response.json(); if (!response.ok) throw new Error(data.error || '操作失败'); currentUser = data.user; authToken = data.token || authToken; localStorage.setItem('domscan-user', JSON.stringify(currentUser)); localStorage.setItem('domscan-token', authToken); refreshAccountUI(); authDialog.close(); } catch (err) { error.textContent = err.message; } });
+document.querySelector('#user-open').addEventListener('click', () => { document.querySelector('#user-email').textContent = currentUser?.email || ''; document.querySelector('#user-created').textContent = currentUser?.createdAt ? new Date(currentUser.createdAt).toLocaleString('zh-CN') : '—'; document.querySelector('#user-avatar').src = currentUser?.avatar || ''; userDialog.showModal(); });
+async function profileRequest(path, body) { const response = await fetch(path, {method:'PUT', headers:{'Content-Type':'application/json','Authorization':`Bearer ${authToken}`}, body:JSON.stringify(body)}); const data = await response.json(); if (!response.ok) throw new Error(data.error || '操作失败'); return data; }
+document.querySelector('#email-form').addEventListener('submit', async e => { e.preventDefault(); try { const data = await profileRequest('/api/auth/email', {email:currentUser.email,newEmail:document.querySelector('#new-email').value}); currentUser.email=data.email; localStorage.setItem('domscan-user',JSON.stringify(currentUser)); document.querySelector('#user-email').textContent=data.email; document.querySelector('#user-message').textContent='邮箱修改成功'; } catch(err) { document.querySelector('#user-message').textContent=err.message; } });
+document.querySelector('#password-form').addEventListener('submit', async e => { e.preventDefault(); try { await profileRequest('/api/auth/password', {email:currentUser.email,password:document.querySelector('#new-password').value}); e.target.reset(); document.querySelector('#user-message').textContent='密码修改成功'; } catch(err) { document.querySelector('#user-message').textContent=err.message; } });
+document.querySelector('#avatar-file').addEventListener('change', e => { const file=e.target.files[0]; if (!file || !currentUser) return; if(file.size>1.5*1024*1024){document.querySelector('#user-message').textContent='头像不能超过 1.5MB';return;} const reader=new FileReader(); reader.onload=async()=>{ try { const data=await profileRequest('/api/auth/avatar',{email:currentUser.email,avatar:reader.result}); currentUser.avatar=data.avatar; localStorage.setItem('domscan-user',JSON.stringify(currentUser)); document.querySelector('#user-avatar').src=data.avatar; document.querySelector('#user-message').textContent='头像更新成功'; } catch(err){document.querySelector('#user-message').textContent=err.message;} }; reader.readAsDataURL(file); });
+document.querySelector('#user-close').addEventListener('click', () => userDialog.close());
+document.querySelector('#logout-btn').addEventListener('click', () => { currentUser = null; authToken = ''; localStorage.removeItem('domscan-user'); localStorage.removeItem('domscan-token'); refreshAccountUI(); userDialog.close(); });
+refreshAccountUI();
+const quickResult = document.querySelector('#quick-result');
+const tldCards = document.querySelector('#tld-cards');
+document.querySelector('#quick-form').addEventListener('submit', async e => { e.preventDefault(); const value=document.querySelector('#quick-domain').value.trim().toLowerCase(); quickResult.textContent='查询中…'; try { const response=await fetch('/api/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domains:[value],concurrency:1})}); if(!response.ok) throw new Error('域名格式无效'); const data=JSON.parse((await response.text()).split('\n')[0]); quickResult.textContent=`${statusText(data.status)} · 到期时间：${formatExpiration(data.expirationTime)}`; } catch(err) { quickResult.textContent=err.message; } });
+document.querySelector('#quick-batch').addEventListener('click', () => document.querySelector('#search-form').scrollIntoView({behavior:'smooth'}));
+function renderTLDs() { const base=document.querySelector('#quick-domain').value.trim().split('.')[0] || 'fhcode'; tldCards.innerHTML=''; ['com','net','org','io','ai','cn'].forEach(tld => { const card=document.createElement('button'); card.className='tld-card'; card.type='button'; card.innerHTML='<strong></strong><span>待检测</span>'; card.firstElementChild.textContent=`${base}.${tld}`; card.addEventListener('click',()=>{document.querySelector('#quick-domain').value=`${base}.${tld}`; document.querySelector('#quick-form').requestSubmit();}); tldCards.appendChild(card); }); }
+renderTLDs(); document.querySelector('#quick-domain').addEventListener('input', renderTLDs);
 
 function tokens(value) { return value.split(/[\s,，;；]+/).map(v => v.trim()).filter(Boolean); }
 function options() {

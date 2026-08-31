@@ -36,6 +36,9 @@ type Config struct {
 	EmailTo                                         []string
 	EmailTimeout                                    time.Duration
 	EmailBatchSize                                  int
+	DatabaseURL                                     string
+	DatabaseEnabled                                 bool
+	JWTSecret                                       string
 }
 
 // Load reads a dotenv file when present, then overlays process environment
@@ -61,6 +64,8 @@ func Load(path string) (Config, error) {
 		RDAPBootstrapURL: value("DOMAIN_RDAP_BOOTSTRAP_URL", "https://data.iana.org/rdap/dns.json"),
 		RedisURL:         value("DOMAIN_REDIS_URL", "redis://localhost:6379/0"),
 		RedisKeyPrefix:   value("DOMAIN_REDIS_KEY_PREFIX", "domscan:availability:"),
+		DatabaseURL:      value("DOMAIN_DATABASE_URL", "postgres://domscan:domscan@localhost:5432/domscan?sslmode=disable"),
+		JWTSecret:        value("DOMAIN_JWT_SECRET", "change-this-secret-in-production"),
 		SMTPHost:         value("DOMAIN_SMTP_HOST", ""), SMTPUsername: value("DOMAIN_SMTP_USERNAME", ""), SMTPPassword: value("DOMAIN_SMTP_PASSWORD", ""), EmailFrom: value("DOMAIN_SMTP_FROM", ""),
 	}
 	emailEnabled, parseEmailErr := strconv.ParseBool(value("DOMAIN_EMAIL_ENABLED", "false"))
@@ -68,6 +73,13 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("DOMAIN_EMAIL_ENABLED 必须是 true 或 false")
 	}
 	cfg.EmailEnabled = emailEnabled
+	cfg.DatabaseEnabled, parseEmailErr = strconv.ParseBool(value("DOMAIN_DATABASE_ENABLED", "true"))
+	if parseEmailErr != nil {
+		return Config{}, fmt.Errorf("DOMAIN_DATABASE_ENABLED 必须是 true 或 false")
+	}
+	if len(cfg.JWTSecret) < 32 {
+		return Config{}, fmt.Errorf("DOMAIN_JWT_SECRET 至少需要 32 个字符")
+	}
 	cfg.SMTPPort, parseEmailErr = strconv.Atoi(value("DOMAIN_SMTP_PORT", "587"))
 	if parseEmailErr != nil || cfg.SMTPPort < 1 || cfg.SMTPPort > 65535 {
 		return Config{}, fmt.Errorf("DOMAIN_SMTP_PORT 必须是 1 到 65535")

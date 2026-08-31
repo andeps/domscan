@@ -7,13 +7,13 @@
 需要 Go 1.25 或更高版本：
 
 ```bash
-go run ./cmd/server
+go run .
 ```
 
 浏览器打开 <http://localhost:8080>。也可以编译成单个可执行文件，网页资源会被一起嵌入：
 
 ```bash
-go build -o bin/domscan ./cmd/server
+go build -o bin/domscan .
 ./bin/domscan
 ```
 
@@ -83,8 +83,19 @@ make run
 时间配置使用 Go duration 格式，例如 `500ms`、`12s`、`5m`。如需临时替换 RDAP 服务，也可以直接使用系统环境变量：
 
 ```bash
-DOMAIN_RDAP_FALLBACK_URLS=https://your-rdap.example/domain/ go run ./cmd/server
+DOMAIN_RDAP_FALLBACK_URLS=https://your-rdap.example/domain/ go run .
 ```
+
+## 用户注册与登录
+
+项目支持使用邮箱作为账号注册和登录，密码使用 bcrypt 哈希保存。启动 PostgreSQL 后，服务会自动创建 `users` 表，并提供：
+
+```text
+POST /api/auth/register  {"email":"user@example.com","password":"至少 8 位"}
+POST /api/auth/login     {"email":"user@example.com","password":"..."}
+```
+
+默认数据库配置来自 `.env`，可用 `docker compose up -d postgres` 启动 PostgreSQL。生产环境请修改数据库密码和连接串。
 
 ## Redis 缓存
 
@@ -112,13 +123,14 @@ make cache-down   # 停止 Redis，数据卷会保留
 ## 项目结构
 
 ```text
-cmd/server/               程序入口、配置与优雅退出
+main.go                   程序入口、配置与优雅退出
 config/                   .env 解析、默认值和配置校验
 domain/                   候选域名生成和域名格式校验
 availability/             RDAP 注册状态检测
 rediscache/               Redis 缓存存储实现
 httpserver/               Gin API、并发调度、中间件和嵌入式前端
 httpserver/web/           HTML、CSS 和 JavaScript
+user/                     用户注册、登录和密码安全存储
 ```
 
 依赖方向为 `cmd → config / httpserver / availability / rediscache`，以及 `httpserver → domain / availability`、`rediscache → availability`。领域生成器不依赖网络和 HTTP，可以单独测试。

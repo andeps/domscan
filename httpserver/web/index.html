@@ -9,15 +9,17 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="域见首页"><span class="brand-mark">域</span><span>域见</span></a>
-    <span class="top-note">RDAP 实时查询</span>
+    <a class="brand" href="/" aria-label="fhcode 首页"><span class="brand-mark">f</span><span>fhcode</span></a>
+    <nav class="main-nav"><a href="#quick-check">域名检测</a><a href="#search-form">批量扫描</a><a href="#discovery">域名发现</a><a href="#pricing">价格对比</a></nav>
+    <div class="account-actions"><button id="login-open" class="secondary" type="button">登录</button><button id="register-open" class="secondary" type="button">注册</button><button id="user-open" class="secondary" type="button" hidden>用户管理</button></div>
   </header>
   <main>
-    <section class="hero">
-      <p class="eyebrow">DOMAIN DISCOVERY</p>
-      <h1>找到那个<br><em>还没人拥有</em>的名字。</h1>
-      <p class="lead">输入品牌关键词，设定你的规则。我们生成候选，并逐个核对注册数据。</p>
+    <section class="hero" id="quick-check">
+      <p class="eyebrow">DOMAIN INTELLIGENCE</p><h1>快速发现可注册域名，<br><em>监控域名到期状态。</em></h1><p class="lead">输入一个域名，立即获取注册状态、到期时间和基础 DNS 信息。</p>
+      <form id="quick-form" class="quick-form"><input id="quick-domain" placeholder="输入域名，例如 fhcode.com" required><button class="primary" type="submit">立即检测</button><button id="quick-batch" class="secondary" type="button">批量检测</button></form><div id="quick-result" class="quick-result"></div>
     </section>
+    <section class="popular-tlds"><h2>热门后缀快速检测</h2><div id="tld-cards"></div></section>
+    <section class="capabilities"><article><span>⌕</span><h3>域名检测</h3><p>查询注册状态和到期时间</p></article><article><span>▦</span><h3>批量扫描</h3><p>一次检测多个域名</p></article><article id="discovery"><span>✦</span><h3>域名发现</h3><p>输入关键词，自动发现可注册组合</p></article></section>
 
     <section class="workspace" aria-label="域名搜索设置">
       <form id="search-form" class="config-panel">
@@ -127,6 +129,12 @@
       <p class="disclaimer">检测结果仅表示当前 RDAP 注册数据状态，最终是否可购买及价格请以注册商为准。</p>
     </dialog>
   </main>
+  <dialog id="auth-dialog" class="domain-dialog" aria-labelledby="auth-title">
+    <button id="auth-close" class="dialog-close" type="button">×</button><p class="eyebrow">ACCOUNT</p><h2 id="auth-title">登录</h2>
+    <form id="auth-form" class="auth-form"><input id="auth-email" type="email" placeholder="邮箱地址" required><input id="auth-password" type="password" placeholder="密码（至少 8 位）" minlength="8" required><p id="auth-error" class="error"></p><button class="primary" type="submit">继续</button></form>
+    <button id="auth-switch" class="text-button" type="button">没有账号？注册</button>
+  </dialog>
+  <dialog id="user-dialog" class="domain-dialog" aria-labelledby="user-title"><button id="user-close" class="dialog-close" type="button">×</button><p class="eyebrow">ACCOUNT</p><h2 id="user-title">用户管理</h2><div class="avatar-box"><img id="user-avatar" alt="头像"><label class="secondary" for="avatar-file">上传头像</label><input id="avatar-file" type="file" accept="image/*" hidden></div><div class="detail-grid"><div class="detail-wide"><span>邮箱</span><strong id="user-email"></strong></div><div class="detail-wide"><span>注册时间</span><strong id="user-created"></strong></div></div><form id="email-form" class="auth-form"><input id="new-email" type="email" placeholder="新邮箱" required><button class="secondary" type="submit">修改邮箱</button></form><form id="password-form" class="auth-form"><input id="new-password" type="password" placeholder="新密码（至少 8 位）" minlength="8" required><button class="secondary" type="submit">修改密码</button></form><p id="user-message" class="search-note"></p><button id="logout-btn" class="secondary logout-btn" type="button">退出登录</button></dialog>
   <script src="/app.js" defer></script>
 </body>
 </html>

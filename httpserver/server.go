@@ -13,6 +13,7 @@ import (
 
 	"domscan/availability"
 	"domscan/domain"
+	"domscan/user"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,6 +28,7 @@ type server struct {
 	cacheEnabled bool
 	notifier     Notifier
 	notifyBatch  int
+	userHandler  *user.Handler
 }
 
 type Notifier interface {
@@ -40,6 +42,7 @@ type Options struct {
 	CacheEnabled          bool
 	Notifier              Notifier
 	NotificationBatchSize int
+	UserHandler           *user.Handler
 }
 
 // New builds the Gin application, including embedded frontend assets.
@@ -55,6 +58,7 @@ func New(checker availability.Checker, supplied ...Options) http.Handler {
 		batchSize = 10
 	}
 	app := &server{checker: checker, cacheEnabled: options.CacheEnabled, notifier: options.Notifier, notifyBatch: batchSize}
+	app.userHandler = options.UserHandler
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
 	router.Use(gin.Logger(), gin.Recovery(), securityHeaders(), requestTimeout(options.RequestTimeout))
@@ -69,6 +73,14 @@ func New(checker availability.Checker, supplied ...Options) http.Handler {
 	router.POST("/api/generate", app.handleGenerate)
 	router.POST("/api/check", app.handleCheck)
 	router.POST("/api/search", app.handleSearch)
+	if app.userHandler != nil {
+		router.POST("/api/auth/register", app.userHandler.Register)
+		router.POST("/api/auth/login", app.userHandler.Login)
+		auth := app.userHandler.AuthRequired()
+		router.PUT("/api/auth/email", auth, app.userHandler.UpdateEmail)
+		router.PUT("/api/auth/password", auth, app.userHandler.UpdatePassword)
+		router.PUT("/api/auth/avatar", auth, app.userHandler.UpdateAvatar)
+	}
 	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "接口或页面不存在"})
 	})
