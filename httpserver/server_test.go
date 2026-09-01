@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"domscan/availability"
+	"domscan/user"
+
+	"github.com/gin-gonic/gin"
 )
 
 type fakeChecker struct{}
@@ -30,6 +33,20 @@ func (cacheAwareFakeChecker) Check(_ context.Context, domain string) availabilit
 		return availability.Result{Domain: domain, Status: availability.StatusAvailable, Cached: true}
 	}
 	return availability.Result{Domain: domain, Status: availability.StatusAvailable}
+}
+
+type notificationCall struct {
+	recipient string
+	results   []availability.Result
+}
+
+type recordingNotifier struct {
+	calls chan notificationCall
+}
+
+func (n *recordingNotifier) Notify(_ context.Context, recipient string, results []availability.Result) error {
+	n.calls <- notificationCall{recipient: recipient, results: append([]availability.Result(nil), results...)}
+	return nil
 }
 
 func TestGenerateEndpoint(t *testing.T) {
@@ -122,6 +139,55 @@ func TestSearchAcceptsFuzzyOptions(t *testing.T) {
 	}
 }
 
+func TestSearchNotifiesLoggedInUser(t *testing.T) {
+	notifier := &recordingNotifier{calls: make(chan notificationCall, 1)}
+	app := &server{checker: fakeChecker{}, notifier: notifier, notifyBatch: 10}
+	router := gin.New()
+	router.POST("/api/search", func(c *gin.Context) {
+		c.Set(user.EmailContextKey, "member@example.com")
+		c.Next()
+	}, app.handleSearch)
+
+	body := `{"options":{"keywords":["free"],"tlds":["com"],"minLength":4,"maxLength":4,"digitMode":"forbid","limit":1},"concurrency":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/search", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	select {
+	case call := <-notifier.calls:
+		if call.recipient != "member@example.com" {
+			t.Fatalf("recipient = %q", call.recipient)
+		}
+		if len(call.results) != 1 || call.results[0].Domain != "free.com" {
+			t.Fatalf("unexpected notification results: %+v", call.results)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notification was not queued")
+	}
+}
+
+func TestSearchDoesNotNotifyWithoutLoggedInUser(t *testing.T) {
+	notifier := &recordingNotifier{calls: make(chan notificationCall, 1)}
+	body := `{"options":{"keywords":["free"],"tlds":["com"],"minLength":4,"maxLength":4,"digitMode":"forbid","limit":1},"concurrency":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/search", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	New(fakeChecker{}, Options{GinMode: "test", RequestTimeout: time.Minute, Notifier: notifier}).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"notificationQueued":1`) {
+		t.Fatalf("anonymous search queued notification: %s", recorder.Body.String())
+	}
+	select {
+	case call := <-notifier.calls:
+		t.Fatalf("anonymous notification: %+v", call)
+	default:
+	}
+}
+
 func TestHealthIdentifiesGinAndSetsSecurityHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	recorder := httptest.NewRecorder()
@@ -156,6 +222,19 @@ func TestUnsupportedMethodReturnsJSON(t *testing.T) {
 	New(fakeChecker{}).ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("unexpected content type: %s", contentType)
+	}
+}
+
+func TestRootDoesNotServeFrontend(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	New(fakeChecker{}).ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {

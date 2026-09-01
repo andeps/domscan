@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -74,9 +73,4 @@ func (c *IANAChecker) Check(ctx context.Context, domain string) Result {
 		return Result{Domain: domain, Status: StatusUnknown, Provider: "IANA bootstrap", Message: "没有该后缀的权威 RDAP 地址"}
 	}
 	return NewFallbackChecker(checkers...).Check(ctx, domain)
-}
-
-func ValidateHTTPURL(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
 }

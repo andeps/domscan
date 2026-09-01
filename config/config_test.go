@@ -56,3 +56,40 @@ func TestLoadRejectsInvalidRedisFlag(t *testing.T) {
 		t.Fatal("expected invalid Redis flag error")
 	}
 }
+
+func TestEmailNotificationDoesNotRequireFixedRecipient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	content := "DOMAIN_EMAIL_ENABLED=true\nDOMAIN_SMTP_HOST=smtp.example.com\nDOMAIN_SMTP_FROM=sender@example.com\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("email config should use the logged-in user as recipient: %v", err)
+	}
+	if cfg.SMTPPort != 587 || cfg.EmailBatchSize != 10 || cfg.EmailTimeout != 15*time.Second {
+		t.Fatalf("unexpected email defaults: %+v", cfg)
+	}
+}
+
+func TestEmailNotificationRequiresUserDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	content := "DOMAIN_EMAIL_ENABLED=true\nDOMAIN_SMTP_HOST=smtp.example.com\nDOMAIN_SMTP_FROM=sender@example.com\nDOMAIN_DATABASE_ENABLED=false\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected email notification to require the user database")
+	}
+}
+
+func TestDisabledFeaturesIgnoreTheirSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	content := "DOMAIN_DATABASE_ENABLED=false\nDOMAIN_JWT_SECRET=short\nDOMAIN_DATABASE_URL=\nDOMAIN_REDIS_ENABLED=false\nDOMAIN_REDIS_KEY_PREFIX=\nDOMAIN_REDIS_DIAL_TIMEOUT=invalid\nDOMAIN_EMAIL_ENABLED=false\nDOMAIN_SMTP_PORT=invalid\nDOMAIN_EMAIL_TIMEOUT=invalid\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("disabled feature settings should be ignored: %v", err)
+	}
+}

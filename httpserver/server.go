@@ -3,7 +3,6 @@ package httpserver
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,9 +19,6 @@ import (
 
 const maxCheckDomains = 1000
 
-//go:embed web/*
-var webFiles embed.FS
-
 type server struct {
 	checker      availability.Checker
 	cacheEnabled bool
@@ -32,7 +28,7 @@ type server struct {
 }
 
 type Notifier interface {
-	Notify(context.Context, []availability.Result) error
+	Notify(context.Context, string, []availability.Result) error
 }
 
 // Options controls framework and request lifecycle behavior.
@@ -45,7 +41,7 @@ type Options struct {
 	UserHandler           *user.Handler
 }
 
-// New builds the Gin application, including embedded frontend assets.
+// New builds the Gin API application.
 func New(checker availability.Checker, supplied ...Options) http.Handler {
 	options := Options{GinMode: gin.ReleaseMode, RequestTimeout: 15 * time.Minute}
 	if len(supplied) > 0 {
@@ -61,18 +57,19 @@ func New(checker availability.Checker, supplied ...Options) http.Handler {
 	app.userHandler = options.UserHandler
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
-	router.Use(gin.Logger(), gin.Recovery(), securityHeaders(), requestTimeout(options.RequestTimeout))
+	router.Use(gin.Logger(), gin.Recovery(), apiHeaders(), requestTimeout(options.RequestTimeout))
 	if err := router.SetTrustedProxies(nil); err != nil {
 		panic(err)
 	}
 
-	router.GET("/", app.serveAsset("web/index.html", "text/html; charset=utf-8"))
-	router.GET("/styles.css", app.serveAsset("web/styles.css", "text/css; charset=utf-8"))
-	router.GET("/app.js", app.serveAsset("web/app.js", "text/javascript; charset=utf-8"))
 	router.GET("/api/health", app.handleHealth)
 	router.POST("/api/generate", app.handleGenerate)
 	router.POST("/api/check", app.handleCheck)
-	router.POST("/api/search", app.handleSearch)
+	if app.userHandler != nil {
+		router.POST("/api/search", app.userHandler.AuthRequired(), app.handleSearch)
+	} else {
+		router.POST("/api/search", app.handleSearch)
+	}
 	if app.userHandler != nil {
 		router.POST("/api/auth/register", app.userHandler.Register)
 		router.POST("/api/auth/login", app.userHandler.Login)
@@ -82,22 +79,12 @@ func New(checker availability.Checker, supplied ...Options) http.Handler {
 		router.PUT("/api/auth/avatar", auth, app.userHandler.UpdateAvatar)
 	}
 	router.NoRoute(func(c *gin.Context) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "接口或页面不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "接口不存在"})
 	})
 	router.NoMethod(func(c *gin.Context) {
 		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "请求方法不支持"})
 	})
 	return router
-}
-
-func (s *server) serveAsset(name, contentType string) gin.HandlerFunc {
-	content, err := webFiles.ReadFile(name)
-	if err != nil {
-		panic(fmt.Sprintf("读取嵌入资源 %s 失败：%v", name, err))
-	}
-	return func(c *gin.Context) {
-		c.Data(http.StatusOK, contentType, content)
-	}
 }
 
 func (s *server) handleHealth(c *gin.Context) {
@@ -205,6 +192,7 @@ func (s *server) handleSearch(c *gin.Context) {
 	target, offset := input.Options.Limit, input.Options.Offset
 	fresh, skipped, generated := 0, 0, 0
 	notificationQueued := 0
+	recipient := user.EmailFromContext(c)
 	pendingNotifications := make([]availability.Result, 0, s.notifyBatch)
 	const maxBatches = 100
 	for batch := 0; batch < maxBatches && fresh < target; batch++ {
@@ -230,11 +218,11 @@ func (s *server) handleSearch(c *gin.Context) {
 			c.Writer.Flush()
 			fresh++
 			if result.Status == availability.StatusAvailable {
-				if s.notifier != nil {
+				if s.notifier != nil && recipient != "" {
 					notificationQueued++
 					pendingNotifications = append(pendingNotifications, result)
 					if len(pendingNotifications) >= s.notifyBatch {
-						s.notifyAsync(pendingNotifications)
+						s.notifyAsync(recipient, pendingNotifications)
 						pendingNotifications = make([]availability.Result, 0, s.notifyBatch)
 					}
 				}
@@ -246,19 +234,17 @@ func (s *server) handleSearch(c *gin.Context) {
 		}
 	}
 	if len(pendingNotifications) > 0 && c.Request.Context().Err() == nil {
-		s.notifyAsync(pendingNotifications)
+		s.notifyAsync(recipient, pendingNotifications)
 	}
 	summary := searchSummary{Event: "summary", Fresh: fresh, CachedSkipped: skipped, Generated: generated, NotificationQueued: notificationQueued}
 	_ = encoder.Encode(summary)
 	c.Writer.Flush()
 }
 
-func (s *server) notifyAsync(results []availability.Result) {
+func (s *server) notifyAsync(recipient string, results []availability.Result) {
 	batch := append([]availability.Result(nil), results...)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = s.notifier.Notify(ctx, batch)
+		_ = s.notifier.Notify(context.Background(), recipient, batch)
 	}()
 }
 
@@ -303,12 +289,9 @@ func decodeJSON(c *gin.Context, target any) error {
 	return decoder.Decode(target)
 }
 
-func securityHeaders() gin.HandlerFunc {
+func apiHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "DENY")
-		c.Header("Referrer-Policy", "no-referrer")
-		c.Header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
 		c.Next()
 	}
 }

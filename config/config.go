@@ -33,7 +33,6 @@ type Config struct {
 	EmailEnabled                                    bool
 	SMTPHost, SMTPUsername, SMTPPassword, EmailFrom string
 	SMTPPort                                        int
-	EmailTo                                         []string
 	EmailTimeout                                    time.Duration
 	EmailBatchSize                                  int
 	DatabaseURL                                     string
@@ -77,24 +76,29 @@ func Load(path string) (Config, error) {
 	if parseEmailErr != nil {
 		return Config{}, fmt.Errorf("DOMAIN_DATABASE_ENABLED 必须是 true 或 false")
 	}
-	if len(cfg.JWTSecret) < 32 {
-		return Config{}, fmt.Errorf("DOMAIN_JWT_SECRET 至少需要 32 个字符")
-	}
-	cfg.SMTPPort, parseEmailErr = strconv.Atoi(value("DOMAIN_SMTP_PORT", "587"))
-	if parseEmailErr != nil || cfg.SMTPPort < 1 || cfg.SMTPPort > 65535 {
-		return Config{}, fmt.Errorf("DOMAIN_SMTP_PORT 必须是 1 到 65535")
-	}
-	for _, item := range strings.Split(value("DOMAIN_EMAIL_TO", ""), ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			cfg.EmailTo = append(cfg.EmailTo, item)
+	if cfg.DatabaseEnabled {
+		if strings.TrimSpace(cfg.DatabaseURL) == "" {
+			return Config{}, fmt.Errorf("启用数据库用户模块时 DOMAIN_DATABASE_URL 不能为空")
+		}
+		if len(cfg.JWTSecret) < 32 {
+			return Config{}, fmt.Errorf("DOMAIN_JWT_SECRET 至少需要 32 个字符")
 		}
 	}
-	if cfg.EmailEnabled && (cfg.SMTPHost == "" || cfg.EmailFrom == "" || len(cfg.EmailTo) == 0) {
-		return Config{}, fmt.Errorf("启用邮箱通知时必须配置 SMTP 主机、发件人和收件人")
-	}
-	cfg.EmailBatchSize, parseEmailErr = strconv.Atoi(value("DOMAIN_EMAIL_BATCH_SIZE", "10"))
-	if parseEmailErr != nil || cfg.EmailBatchSize < 1 || cfg.EmailBatchSize > 1000 {
-		return Config{}, fmt.Errorf("DOMAIN_EMAIL_BATCH_SIZE 必须在 1 到 1000 之间")
+	if cfg.EmailEnabled {
+		if !cfg.DatabaseEnabled {
+			return Config{}, fmt.Errorf("启用邮箱通知时必须启用数据库用户模块")
+		}
+		if strings.TrimSpace(cfg.SMTPHost) == "" || strings.TrimSpace(cfg.EmailFrom) == "" {
+			return Config{}, fmt.Errorf("启用邮箱通知时必须配置 SMTP 主机和发件人")
+		}
+		cfg.SMTPPort, parseEmailErr = strconv.Atoi(value("DOMAIN_SMTP_PORT", "587"))
+		if parseEmailErr != nil || cfg.SMTPPort < 1 || cfg.SMTPPort > 65535 {
+			return Config{}, fmt.Errorf("DOMAIN_SMTP_PORT 必须是 1 到 65535")
+		}
+		cfg.EmailBatchSize, parseEmailErr = strconv.Atoi(value("DOMAIN_EMAIL_BATCH_SIZE", "10"))
+		if parseEmailErr != nil || cfg.EmailBatchSize < 1 || cfg.EmailBatchSize > 1000 {
+			return Config{}, fmt.Errorf("DOMAIN_EMAIL_BATCH_SIZE 必须在 1 到 1000 之间")
+		}
 	}
 	if strings.TrimSpace(cfg.Address) == "" {
 		return Config{}, fmt.Errorf("DOMAIN_TOOL_ADDR 不能为空")
@@ -107,11 +111,13 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("DOMAIN_REDIS_ENABLED 必须是 true 或 false")
 	}
 	cfg.RedisEnabled = redisEnabled
-	if cfg.RedisEnabled && strings.TrimSpace(cfg.RedisURL) == "" {
-		return Config{}, fmt.Errorf("启用 Redis 时 DOMAIN_REDIS_URL 不能为空")
-	}
-	if strings.TrimSpace(cfg.RedisKeyPrefix) == "" {
-		return Config{}, fmt.Errorf("DOMAIN_REDIS_KEY_PREFIX 不能为空")
+	if cfg.RedisEnabled {
+		if strings.TrimSpace(cfg.RedisURL) == "" {
+			return Config{}, fmt.Errorf("启用 Redis 时 DOMAIN_REDIS_URL 不能为空")
+		}
+		if strings.TrimSpace(cfg.RedisKeyPrefix) == "" {
+			return Config{}, fmt.Errorf("启用 Redis 时 DOMAIN_REDIS_KEY_PREFIX 不能为空")
+		}
 	}
 	if !validHTTPURL(cfg.RDAPBootstrapURL) {
 		return Config{}, fmt.Errorf("DOMAIN_RDAP_BOOTSTRAP_URL 必须是有效的 HTTP(S) 地址")
@@ -135,20 +141,27 @@ func Load(path string) (Config, error) {
 	}
 	cfg.RDAPProviderConcurrency = providerConcurrency
 
-	durations := []struct {
+	type durationSetting struct {
 		key      string
 		fallback string
 		target   *time.Duration
-	}{
+	}
+	durations := []durationSetting{
 		{"DOMAIN_RDAP_TIMEOUT", "12s", &cfg.RDAPTimeout},
 		{"DOMAIN_HTTP_READ_HEADER_TIMEOUT", "5s", &cfg.ReadHeaderTimeout},
 		{"DOMAIN_HTTP_IDLE_TIMEOUT", "60s", &cfg.IdleTimeout},
 		{"DOMAIN_HTTP_SHUTDOWN_TIMEOUT", "5s", &cfg.ShutdownTimeout},
 		{"DOMAIN_HTTP_REQUEST_TIMEOUT", "15m", &cfg.RequestTimeout},
-		{"DOMAIN_REDIS_DIAL_TIMEOUT", "2s", &cfg.RedisDialTimeout},
-		{"DOMAIN_CACHE_TTL", "24h", &cfg.CacheTTL},
-		{"DOMAIN_CACHE_UNKNOWN_TTL", "5m", &cfg.CacheUnknownTTL},
-		{"DOMAIN_EMAIL_TIMEOUT", "15s", &cfg.EmailTimeout},
+	}
+	if cfg.RedisEnabled {
+		durations = append(durations,
+			durationSetting{"DOMAIN_REDIS_DIAL_TIMEOUT", "2s", &cfg.RedisDialTimeout},
+			durationSetting{"DOMAIN_CACHE_TTL", "24h", &cfg.CacheTTL},
+			durationSetting{"DOMAIN_CACHE_UNKNOWN_TTL", "5m", &cfg.CacheUnknownTTL},
+		)
+	}
+	if cfg.EmailEnabled {
+		durations = append(durations, durationSetting{"DOMAIN_EMAIL_TIMEOUT", "15s", &cfg.EmailTimeout})
 	}
 	for _, item := range durations {
 		duration, parseErr := time.ParseDuration(value(item.key, item.fallback))
