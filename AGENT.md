@@ -53,7 +53,7 @@ rediscache
 4. RDAP 返回 HTTP 200 才标记为 `registered`，404 才标记为 `available`。超时、限流和其他状态必须是 `unknown`，不能误报为可注册。
 5. RDAP `events` 中的 expiration 事件写入结果 `expirationTime`，缺失时保持空值。
 5. DNS 无记录不等于域名未注册。不要用 DNS 查询替换 RDAP 注册状态判断。
-6. `/api/check` 使用 `application/x-ndjson` 逐行返回结果。修改后端或客户端时必须同时保持这一协议。
+6. `/api/check` 和 `/api/search` 使用 `application/x-ndjson`，每个检测结果完成后必须立即写入一行并 Flush，不能等待整批完成。修改后端或客户端时必须同时保持这一协议。
 7. 所有进入检查器的域名必须先通过 `domain.Valid`；当前仅支持小写 ASCII 域名标签。
 9. 缓存命中必须跳过底层 RDAP 检查，并在 API 结果中设置 `cached: true`。
 10. `available` 和 `registered` 使用正常缓存 TTL；`unknown` 必须使用较短 TTL，不能永久缓存网络故障。

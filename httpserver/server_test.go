@@ -1,12 +1,15 @@
 package httpserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +34,45 @@ type cacheAwareFakeChecker struct{}
 func (cacheAwareFakeChecker) Check(_ context.Context, domain string) availability.Result {
 	if domain == "cached.com" {
 		return availability.Result{Domain: domain, Status: availability.StatusAvailable, Cached: true}
+	}
+	return availability.Result{Domain: domain, Status: availability.StatusAvailable}
+}
+
+type delayedStreamingChecker struct {
+	slowDone chan struct{}
+}
+
+type flushOnlyResponseWriter struct {
+	header  http.Header
+	output  *io.PipeWriter
+	pending bytes.Buffer
+	mu      sync.Mutex
+}
+
+func (w *flushOnlyResponseWriter) Header() http.Header { return w.header }
+
+func (w *flushOnlyResponseWriter) WriteHeader(_ int) {}
+
+func (w *flushOnlyResponseWriter) Write(payload []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pending.Write(payload)
+}
+
+func (w *flushOnlyResponseWriter) Flush() {
+	w.mu.Lock()
+	payload := append([]byte(nil), w.pending.Bytes()...)
+	w.pending.Reset()
+	w.mu.Unlock()
+	if len(payload) > 0 {
+		_, _ = w.output.Write(payload)
+	}
+}
+
+func (c delayedStreamingChecker) Check(_ context.Context, domain string) availability.Result {
+	if domain == "fast0.com" {
+		time.Sleep(500 * time.Millisecond)
+		close(c.slowDone)
 	}
 	return availability.Result{Domain: domain, Status: availability.StatusAvailable}
 }
@@ -139,6 +181,46 @@ func TestSearchAcceptsFuzzyOptions(t *testing.T) {
 	}
 }
 
+func TestSearchFlushesEachResultBeforeAllChecksFinish(t *testing.T) {
+	slowDone := make(chan struct{})
+	body := `{"options":{"keywords":["fast"],"tlds":["com"],"minLength":4,"maxLength":5,"digitMode":"allow","limit":2},"concurrency":2}`
+	reader, writer := io.Pipe()
+	responseWriter := &flushOnlyResponseWriter{header: make(http.Header), output: writer}
+	req := httptest.NewRequest(http.MethodPost, "/api/search", strings.NewReader(body))
+	handler := New(delayedStreamingChecker{slowDone: slowDone}, Options{GinMode: "test", RequestTimeout: time.Minute})
+	go func() {
+		handler.ServeHTTP(responseWriter, req)
+		_ = writer.Close()
+	}()
+
+	scanner := bufio.NewScanner(reader)
+	if !scanner.Scan() {
+		t.Fatalf("first streamed line missing: %v", scanner.Err())
+	}
+	if responseWriter.Header().Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("X-Accel-Buffering = %q", responseWriter.Header().Get("X-Accel-Buffering"))
+	}
+	var first availability.Result
+	if err := json.Unmarshal(scanner.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Domain != "fast.com" {
+		t.Fatalf("first streamed result = %+v", first)
+	}
+	select {
+	case <-slowDone:
+		t.Fatal("first result was buffered until all checks completed")
+	default:
+	}
+
+	if !scanner.Scan() {
+		t.Fatalf("second streamed line missing: %v", scanner.Err())
+	}
+	if !scanner.Scan() {
+		t.Fatalf("summary line missing: %v", scanner.Err())
+	}
+}
+
 func TestSearchNotifiesLoggedInUser(t *testing.T) {
 	notifier := &recordingNotifier{calls: make(chan notificationCall, 1)}
 	app := &server{checker: fakeChecker{}, notifier: notifier, notifyBatch: 10}
@@ -213,6 +295,17 @@ func TestHealthReportsRedisCache(t *testing.T) {
 	New(fakeChecker{}, Options{GinMode: "test", RequestTimeout: time.Minute, CacheEnabled: true}).ServeHTTP(recorder, req)
 	if !strings.Contains(recorder.Body.String(), `"cache":"redis"`) {
 		t.Fatalf("health response does not report Redis: %s", recorder.Body.String())
+	}
+}
+
+func TestPartialOptionsKeepDefaultRequestTimeout(t *testing.T) {
+	body := `{"domains":["free.com"],"concurrency":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/check", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	New(fakeChecker{}, Options{GinMode: "test"}).ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"domain":"free.com"`) {
+		t.Fatalf("partial options canceled request: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

@@ -47,6 +47,12 @@ func New(checker availability.Checker, supplied ...Options) http.Handler {
 	if len(supplied) > 0 {
 		options = supplied[0]
 	}
+	if options.GinMode == "" {
+		options.GinMode = gin.ReleaseMode
+	}
+	if options.RequestTimeout <= 0 {
+		options.RequestTimeout = 15 * time.Minute
+	}
 	gin.SetMode(options.GinMode)
 
 	batchSize := options.NotificationBatchSize
@@ -127,6 +133,29 @@ type searchSummary struct {
 	NotificationQueued int    `json:"notificationQueued,omitempty"`
 }
 
+type ndjsonStream struct {
+	encoder    *json.Encoder
+	controller *http.ResponseController
+}
+
+func newNDJSONStream(c *gin.Context) *ndjsonStream {
+	c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
+	c.Header("Cache-Control", "no-store, no-transform")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	c.Writer.WriteHeaderNow()
+	controller := http.NewResponseController(c.Writer)
+	_ = controller.Flush()
+	return &ndjsonStream{encoder: json.NewEncoder(c.Writer), controller: controller}
+}
+
+func (s *ndjsonStream) Write(value any) error {
+	if err := s.encoder.Encode(value); err != nil {
+		return err
+	}
+	return s.controller.Flush()
+}
+
 func (s *server) handleCheck(c *gin.Context) {
 	var input checkRequest
 	if err := decodeJSON(c, &input); err != nil {
@@ -150,15 +179,11 @@ func (s *server) handleCheck(c *gin.Context) {
 		input.Concurrency = 20
 	}
 
-	c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
-	c.Header("Cache-Control", "no-store")
-	c.Status(http.StatusOK)
-	encoder := json.NewEncoder(c.Writer)
+	stream := newNDJSONStream(c)
 	for result := range s.checkAll(c.Request.Context(), input.Domains, input.Concurrency) {
-		if err := encoder.Encode(result); err != nil {
+		if err := stream.Write(result); err != nil {
 			return
 		}
-		c.Writer.Flush()
 	}
 }
 
@@ -185,10 +210,7 @@ func (s *server) handleSearch(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
-	c.Header("Cache-Control", "no-store")
-	c.Status(http.StatusOK)
-	encoder := json.NewEncoder(c.Writer)
+	stream := newNDJSONStream(c)
 	target, offset := input.Options.Limit, input.Options.Offset
 	fresh, skipped, generated := 0, 0, 0
 	notificationQueued := 0
@@ -212,10 +234,9 @@ func (s *server) handleSearch(c *gin.Context) {
 			if fresh >= target {
 				continue
 			}
-			if err := encoder.Encode(result); err != nil {
+			if err := stream.Write(result); err != nil {
 				return
 			}
-			c.Writer.Flush()
 			fresh++
 			if result.Status == availability.StatusAvailable {
 				if s.notifier != nil && recipient != "" {
@@ -237,8 +258,7 @@ func (s *server) handleSearch(c *gin.Context) {
 		s.notifyAsync(recipient, pendingNotifications)
 	}
 	summary := searchSummary{Event: "summary", Fresh: fresh, CachedSkipped: skipped, Generated: generated, NotificationQueued: notificationQueued}
-	_ = encoder.Encode(summary)
-	c.Writer.Flush()
+	_ = stream.Write(summary)
 }
 
 func (s *server) notifyAsync(recipient string, results []availability.Result) {

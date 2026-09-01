@@ -71,7 +71,7 @@ PUT  /api/auth/password  {"password":"新的至少 8 位密码"}
 PUT  /api/auth/avatar    {"avatar":"data:image/..."}
 ```
 
-`POST /api/search` 会跳过 Redis 中已有的候选，并通过 `offset` 继续生成，直到返回请求数量的新结果。响应的最后一行是 `event: "summary"` 汇总，不能作为域名结果解析。`POST /api/check` 和 `/api/search` 的响应类型均为 `application/x-ndjson`。
+`POST /api/search` 会跳过 Redis 中已有的候选，并通过 `offset` 继续生成，直到返回请求数量的新结果。每检测完成一个域名，服务端会立即写入一行 JSON 并刷新响应，不等待整批完成；最后一行是 `event: "summary"` 汇总，不能作为域名结果解析。`POST /api/check` 和 `/api/search` 的响应类型均为 `application/x-ndjson`，前端应通过 `ReadableStream` 或逐行读取方式消费，不能使用等待完整响应的 `response.json()`。
 
 单次生成或检测最多 1000 个候选，请求并发上限为 20。客户端取消请求后，服务端会停止后续生成和查询。
 

@@ -19,6 +19,7 @@ type memoryCache struct {
 	found  bool
 	getErr error
 	setTTL time.Duration
+	sets   int
 }
 
 func (c *memoryCache) Get(_ context.Context, _ string) (Result, bool, error) {
@@ -27,7 +28,39 @@ func (c *memoryCache) Get(_ context.Context, _ string) (Result, bool, error) {
 
 func (c *memoryCache) Set(_ context.Context, _ string, result Result, ttl time.Duration) error {
 	c.result, c.found, c.setTTL = result, true, ttl
+	c.sets++
 	return nil
+}
+
+func TestCachedCheckerSkipsWorkWhenRequestAlreadyCanceled(t *testing.T) {
+	next := &countingChecker{}
+	cache := &memoryCache{}
+	checker := NewCachedChecker(next, cache, time.Hour, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := checker.Check(ctx, "canceled.example")
+	if result.Status != StatusUnknown || result.Message != "查询已取消" {
+		t.Fatalf("unexpected canceled result: %+v", result)
+	}
+	if next.calls != 0 || cache.sets != 0 {
+		t.Fatalf("canceled request performed work: calls=%d sets=%d", next.calls, cache.sets)
+	}
+}
+
+func TestCachedCheckerDoesNotWriteAfterCheckIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	next := CheckerFunc(func(_ context.Context, domain string) Result {
+		cancel()
+		return Result{Domain: domain, Status: StatusUnknown, Message: "查询已取消"}
+	})
+	cache := &memoryCache{}
+	checker := NewCachedChecker(next, cache, time.Hour, time.Minute)
+
+	checker.Check(ctx, "canceled.example")
+	if cache.sets != 0 {
+		t.Fatalf("cache writes after cancellation = %d, want 0", cache.sets)
+	}
 }
 
 func TestCachedCheckerReturnsCacheHitWithoutScanning(t *testing.T) {
